@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include<stdio.h>
 #include "../multiband_compressor/mbc.h"
+#include "../rds/rds.h"
 //Evan Nikitin 2025
 
 int intialize_timings=0;
@@ -64,6 +65,11 @@ double offset38=0.00793875;
 //float offseth=0;
 //7516;
 
+//the RDS subcarrier sits at 57khz, the third harmonic of the pilot. it gets
+//the same treatment as the other two: its own table and its own phase offset
+//so it can be lined up with whatever your sound card does to it.
+double offset57=0;
+
 int itterator=0;
 int itterator2=0;
 double tlim = 2081818578;
@@ -72,9 +78,15 @@ double* synth_19=NULL;
 double* synth_19_fft=NULL;
 double* synth_19_fft_c=NULL;
 double* synth_38=NULL;
+double* synth_57=NULL;
 
 double* s48_38=NULL;
 double* s48_19=NULL;
+
+//generating the 57khz table costs another pass of the slow sine loop, so it is
+//only built when RDS is actually switched on
+int want_57=0;
+double rds_percent=0;
 
 
 void free_mpx_cache(){
@@ -86,18 +98,36 @@ void free_mpx_cache(){
 
   free(s48_38);
   free(s48_19);
+  free(synth_57);
 
+  //the cache is regenerated whenever the phase offsets change,
+  //so it has to be safe to free it more than once
+  synth_19_fft=NULL;
+  synth_19_fft_c=NULL;
+  synth_19=NULL;
+  synth_38=NULL;
+  synth_57=NULL;
+  s48_38=NULL;
+  s48_19=NULL;
+
+  rds_free();
 }
+//the 48khz tables are the 19k and 38k waves decimated by four, so they are a
+//quarter as long as the 192khz ones and have their own iterator.
+//they used to be indexed with the 192khz iterator, which read up to four times
+//past the end of the allocation.
+#define BUFFER_SIZE_48 (buffer_size/4)
+
 double get_48_19k(){
-  return s48_19[itterator];
+  return s48_19[itterator2];
 }
 double get_48_38k(){
-  return s48_38[itterator];
+  return s48_38[itterator2];
 }
 
 void itterate_48k_sample(){
   itterator2++;
-  if(itterator2>=buffer_size){
+  if(itterator2>=BUFFER_SIZE_48){
           itterator2=0;
   }
 
@@ -107,6 +137,7 @@ void init_mpx_cache(long double ratekhz,long double over_sampling){
       free_mpx_cache();
       long double shifter_19 = ((19000.0) / (ratekhz*over_sampling))*(2*M_PI);
       long double shifter_38 = shifter_19*2;
+      long double shifter_57 = shifter_19*3;
 
 
 
@@ -118,6 +149,8 @@ void init_mpx_cache(long double ratekhz,long double over_sampling){
       synth_19_fft=malloc(sizeof(double)*buffer_size);
       synth_19_fft_c=malloc(sizeof(double)*buffer_size);
       synth_38=malloc(sizeof(double)*buffer_size);
+      if(want_57)
+        synth_57=malloc(sizeof(double)*buffer_size);
 
       s48_38=malloc(sizeof(double)*(buffer_size/4));
       s48_19=malloc(sizeof(double)*(buffer_size/4));
@@ -134,16 +167,20 @@ void init_mpx_cache(long double ratekhz,long double over_sampling){
       double* s48_38i = s48_38;
       double s48_38a = 0;
       double s48_19a = 0;
+      double* s57 = synth_57;
 
       for(double* s19=synth_19;counter<buffer_size;s19++){
           long double v19=0;
           long double v38=0;
+          long double v57=0;
           long double cos=0;
           for(int i=0;i<over_sampling;i++){
             v19=v19+sinl(shifter_19*(counter_secondary+offset19));
             cos=cos+sinl(shifter_19*(counter_secondary+offset19));
             v38=v38+sinl(shifter_38*(counter_secondary+offset38));
-            
+            if(want_57)
+              v57=v57+sinl(shifter_57*(counter_secondary+offset57));
+
             counter_secondary=counter_secondary+1;
           }
           counter=counter+1;
@@ -152,6 +189,10 @@ void init_mpx_cache(long double ratekhz,long double over_sampling){
           *s19_fft=-(v19/over_sampling);
           *s19_fft_c=-(cos/over_sampling);
           *s38=(v38/over_sampling);
+          if(want_57){
+            *s57=(v57/over_sampling);
+            s57++;
+          }
 
           if(counterp >= 4){
             *s48_38i = s48_38a/4.0;
@@ -175,7 +216,9 @@ void init_mpx_cache(long double ratekhz,long double over_sampling){
 }
 
 
-void init_mpx(int ratekhz,double percent_pilot,double max){
+//everything init_mpx does except regenerating the wave cache,
+//safe to call between audio buffers while the encoder is running
+void set_mpx_levels(double percent_pilot,double max){
       clip_value=max;
       _pilot=percent_pilot*max;
       mpx_clip_t=max;
@@ -183,8 +226,42 @@ void init_mpx(int ratekhz,double percent_pilot,double max){
       pr_pilot = percent_pilot;
       HF_BIAS=_pilot*P2nd_DAC_HARMONIC;
       st_bias_offset=percent_pilot*P2nd_DAC_HARMONIC;
-      init_mpx_cache(ratekhz,over_sample_co);
+}
 
+void set_mpx_dac_harmonic(double second_harmonic){
+      P2nd_DAC_HARMONIC=second_harmonic;
+      HF_BIAS=_pilot*P2nd_DAC_HARMONIC;
+      st_bias_offset=pr_pilot*P2nd_DAC_HARMONIC;
+}
+
+void set_mpx_harmonic_dist(double percent){
+      harmonic_red_val = 2081818578 * percent;
+}
+
+void set_mpx_phase(double offset_19k,double offset_38k,double offset_57k){
+      offset19=offset_19k;
+      offset38=offset_38k;
+      offset57=offset_57k;
+}
+
+//the 57khz table is only worth generating when RDS is on. changing this needs
+//the cache rebuilt, which is why the setting carries the "cache" badge.
+void set_rds_enabled(int enabled){
+      want_57=enabled?1:0;
+}
+
+void set_rds_level(double percent){
+      rds_percent=percent;
+}
+
+int mpx_has_rds_carrier(void){
+      return (synth_57!=NULL)?1:0;
+}
+
+void init_mpx(int ratekhz,double percent_pilot,double max){
+      set_mpx_levels(percent_pilot,max);
+      init_mpx_cache(ratekhz,over_sample_co);
+      rds_init(ratekhz);
 }
 
 double mpx_peak_38khz_modulation(){
@@ -322,6 +399,15 @@ double get_mpx_next_value(double mono,double stereo,double percent_mono,double p
  double fft_19 = synth_19_fft[itterator];
  double fft_19_c = synth_19_fft_c[itterator];
 
+ //RDS rides on the third harmonic of the pilot. the baseband generator keeps
+ //its own bit clock, locked to the sample rate by an exact integer ratio.
+ double k57=0;
+ if(synth_57!=NULL && rds_percent>0){
+   double data=rds_next_sample();
+   if(data!=0.0)
+     k57=synth_57[itterator]*data*rds_percent*tlim;
+ }
+
 
  mono = mono*(percent_mono);
  stereo = stereo*(percent_stereo);
@@ -371,19 +457,21 @@ double get_mpx_next_value(double mono,double stereo,double percent_mono,double p
   if(namp > tlim)
     namp=tlim;
   k19 = k19*namp;
-  
-  //composite_out = composite_out-(amp*fft_19);
- 
 
-  //make room for the pilot on demand
-  if(composite_out > tlim - k19){
-    double lim = tlim - k19;
+  //composite_out = composite_out-(amp*fft_19);
+
+
+  //make room for the pilot, and for RDS when it is running, on demand
+  double reserved = k19 + k57;
+
+  if(composite_out > tlim - reserved){
+    double lim = tlim - reserved;
     double div = lim/(composite_out);
     composite_out = composite_out*div;
   }
 
-  if(composite_out < -(tlim + k19)){
-    double lim = -(tlim + k19);
+  if(composite_out < -(tlim + reserved)){
+    double lim = -(tlim + reserved);
     double div = lim/(composite_out);
     if(div == 0)
       composite_out =0;
@@ -391,7 +479,7 @@ double get_mpx_next_value(double mono,double stereo,double percent_mono,double p
       composite_out = composite_out/div;
   }
 
-  return k19+composite_out;
+  return reserved+composite_out;
 
 
 

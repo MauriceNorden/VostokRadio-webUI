@@ -2,7 +2,7 @@
 #include <string.h>
 #include<stdlib.h>
 #include "../MPX/generator.h"
-#include "../DEFAULTS.h"
+#include "../config/params.h"
 
 
 //double LIM_knee=3000;
@@ -293,7 +293,8 @@ void apply_sigmoidal(SLim limiter, double* input1, double* input2){
 
 
 
-  double cmp = get_48_19k()*(limit*PERCENT_PILOT) + get_48_38k()*(*input2) + *input1;
+  //vostok_pilot_percent is the live version of the old PERCENT_PILOT define
+  double cmp = get_48_19k()*(limit*vostok_pilot_percent) + get_48_38k()*(*input2) + *input1;
   itterate_48k_sample();
 
 

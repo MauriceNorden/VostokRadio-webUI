@@ -5,10 +5,13 @@
 
 //initialization:
 void set_latency(int latency_buffers); //must be called before setup
-int setup_alsa_pipe(char* recording_iface, 
+int setup_alsa_pipe(char* recording_iface,
     char* playback_iface, int* channels_in,
     int* channels_out,int* input_rate,int* output_rate,
     int buffer_Size);
+//why the last setup_alsa_pipe() returned -1. nothing is left open after a
+//failure, so it is safe to call setup again later.
+const char* alsa_pipe_error(void);
 //recording interface, playback interface
 //channels incomming, channels outgoing
 //ATTENTION: IF YOU HAVE TWO CHANNELS YOUR BUFFER WILL CONTAIN 

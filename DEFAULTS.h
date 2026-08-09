@@ -76,13 +76,27 @@ float knee_release[]={1.002,1.001,1,1,1,1,1};//knee
 
 #define HIGH_PASS // for FM transmitters that have trouble with low frequency bass
 #define HIGH_PASS_CUTOFF 5 //comment the line above to disable
+#define HIGH_PASS_POLES 4
 #define DC_REMOVAL_COEFF 0.0000001
+
+//final low pass, applied per channel after the multiband compressor
+#define FINAL_LOWPASS 17000
+#define FINAL_LOWPASS_POLES 5
+
+//number of poles used by the band splitter of the multiband compressor
+#define BAND_POLES 5
+
+//how many consecutive zero samples count as "silence" (processing is muted after this)
+#define SILENCE_SAMPLES 20000
 
 
 //alsa configuration
 #define RECORDING_IFACE "hw:1,1,0"
 #define PLAYBACK_IFACE "hw:0,0"
 #define RATE 192000 //output rate, for MPX
+#define IN_RATE 48000 //recording rate, the processing chain is tuned for 48khz
+#define BUFFER_SIZE 50000 //output buffer size in samples (both channels)
+#define LATENCY_BUFFERS 20 //how many output buffers the alsa pipe keeps in flight
 //the program always records with a sample rate of 48khz
 
 // 0 is false 1 is true
@@ -99,9 +113,28 @@ float knee_release[]={1.002,1.001,1,1,1,1,1};//knee
 //#define AGC_RELEASE 0.0000000001 //response coefficient
 #define AGC_RELEASE 0.48 //response coefficient
 #define AGC_GATE 0.0001
+#define AGC_GAIN_MAX 40 //the AGC will never amplify by more than this
+#define AGC_GAIN_START 10 //gain the AGC starts at
+#define AGC_SIDECHAIN_CUTOFF 50 //high pass in front of the AGC level detector
+#define AGC_SIDECHAIN_POLES 1
 
 // set to 1 to show the levels in real time, 0 to keep silent
-#define GUI 0 // just have this as zero, the gui doesnt work at this moment
+#define GUI 0 // just have this as zero, the terminal gui doesnt work at this moment
+              // use the web ui instead (see WEB_PORT below)
+
+//web ui, control every setting below from a browser while the processor runs
+#define WEB_PORT 8080
+#define WEB_BIND "0.0.0.0" //use "127.0.0.1" to only allow control from this machine
+#define CONFIG_FILE "vostok.conf" //settings saved from the web ui land here
+
+//internet radio source. when enabled the processor starts a player itself and
+//feeds the stream into RECORDING_IFACE, so nothing else has to be running.
+//needs mpv, ffmpeg or mpg123 installed, and usually the snd-aloop module.
+#define SOURCE_ENABLE 0
+#define SOURCE_URL ""
+#define SOURCE_DEVICE "plughw:CARD=Loopback,DEV=0" //the other end of the loopback
+#define SOURCE_PLAYER "auto" //auto, mpv, ffmpeg or mpg123
+#define SOURCE_CACHE_SECS 20 //stream buffer, also added latency (mpv only)
 
 //FM radio setings, only apply if the output sampling rate is 96khz or higher
 #define MPX_ENABLE //uncomment to enable
@@ -112,6 +145,30 @@ float knee_release[]={1.002,1.001,1,1,1,1,1};//knee
 #define PERCENT_MONO 6.5 // percent of the signal devoted to mono audio
 #define PERCENT_STEREO 6.5// percent of the signal devoted to mono audio
 			   // sometimes if there is distortion, decreasing the percent stereo could help
+
+#define MPX_OUTPUT_GAIN 32769 //scales the 16 bit domain of the chain up to the 32 bit output
+#define MPX_COMPOSITE_LIMIT 2147483647 //peak value of the composite signal
+
+//RDS, the data service on the 57khz subcarrier.
+//needs MPX_ENABLE and a 192khz output rate, 57khz does not fit under nyquist
+//at 96khz. everything here can also be set from the web ui.
+#define RDS_ENABLE 0
+#define RDS_PI "0000"     //four hex digits, assigned by your regulator
+#define RDS_PS "VOSTOK  " //up to 8 characters, the name receivers show
+#define RDS_RT ""         //up to 64 characters of free text
+#define RDS_AF ""         //"100.1, 103.5", empty means no alternatives
+#define RDS_PTY 0         //programme type, 0 is none
+#define RDS_TP 0          //this station carries traffic announcements
+#define RDS_MS 1          //1 music, 0 speech
+#define RDS_DI 8          //bit 3 stereo, 2 artificial head, 1 compressed, 0 dynamic pty
+#define RDS_LEVEL 0.03    //share of the composite peak, 3 percent is normal
+
+//sound card dependent MPX tuning, see the comments in MPX/generator.c
+#define MPX_OFFSET_19K 0        //phase offset of the pilot, in samples
+#define MPX_OFFSET_38K 0.00793875 //phase offset of the 38khz subcarrier, in samples
+#define MPX_OFFSET_57K 0        //phase offset of the RDS subcarrier, in samples
+#define MPX_DAC_2ND_HARMONIC 0.00006 //measured 2nd harmonic of the 19khz pilot
+#define MPX_COMPOSITE_DIST 0.000000001 //how much ultrasonic distortion the composite clipper may make
 
 
 #define SYNTHESIZE_MPX_REALTIME

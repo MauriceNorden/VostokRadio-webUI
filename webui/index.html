@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vostok Radio - DSP control</title>
+<style>
+:root{
+  --bg:#0e1116;
+  --panel:#161b22;
+  --panel2:#1b222c;
+  --line:#2a323d;
+  --text:#dbe3ec;
+  --dim:#8b98a8;
+  --accent:#4aa3ff;
+  --ok:#3fb950;
+  --warn:#d29922;
+  --hot:#f85149;
+  --mpx:#a371f7;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+header{
+  position:sticky;top:0;z-index:20;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 16px;
+  background:rgba(14,17,22,.92);
+  backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);
+}
+h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+h1 span{color:var(--dim);font-weight:400}
+.spacer{flex:1}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--hot);display:inline-block;margin-right:6px}
+.dot.on{background:var(--ok);box-shadow:0 0 8px rgba(63,185,80,.6)}
+.status{color:var(--dim);font-size:12px;white-space:nowrap}
+button{
+  font:inherit;font-size:13px;
+  background:var(--panel2);color:var(--text);
+  border:1px solid var(--line);border-radius:6px;
+  padding:6px 12px;cursor:pointer;
+}
+button:hover{border-color:#41505f}
+button.primary{background:#12395f;border-color:#1d5c99}
+button.primary:hover{background:#164a7c}
+button.danger:hover{border-color:var(--hot);color:var(--hot)}
+button:disabled{opacity:.5;cursor:default}
+input[type=text],input[type=number],input[type=search]{
+  font:inherit;background:#0b0e13;color:var(--text);
+  border:1px solid var(--line);border-radius:5px;padding:4px 7px;
+}
+input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+main{padding:16px;max-width:1500px;margin:0 auto}
+.card{
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;margin-bottom:16px;overflow:hidden;
+}
+.card>h2{
+  font-size:13px;margin:0;padding:10px 14px;
+  text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+  border-bottom:1px solid var(--line);background:var(--panel2);
+}
+.card .body{padding:6px 14px 12px}
+
+/* meters */
+#meters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;padding:14px}
+.meter{min-width:0}
+.meter .cap{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:4px}
+.meter .cap b{color:var(--text);font-weight:500;font-variant-numeric:tabular-nums}
+.bar{height:9px;border-radius:5px;background:#0b0e13;border:1px solid var(--line);overflow:hidden}
+.bar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#2f81f7,#3fb950 55%,#d29922 82%,#f85149);transition:width .12s linear}
+.bar.solo>i{background:var(--accent)}
+
+/* controls */
+.rows{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:2px 22px}
+/* minmax(0,..) on every track, otherwise a long label cannot shrink below its
+   own content and pushes straight through the slider next to it */
+.row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 88px;align-items:center;gap:12px;padding:5px 0;border-bottom:1px solid #1d242e}
+.row:last-child{border-bottom:0}
+.row>*{min-width:0}
+.row label{font-size:13px;color:var(--text);display:flex;align-items:center;gap:6px;min-width:0}
+.row label .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row label .u{color:var(--dim);font-size:11px;flex:none}
+.row .num{width:100%;text-align:right;font-variant-numeric:tabular-nums}
+.row .wide{grid-column:2 / span 2;min-width:0}
+.row .wide input{width:100%}
+input[type=range]{display:block;width:100%;min-width:0;accent-color:var(--accent);background:transparent;height:20px;margin:0}
+/* one control per line once there is no room for label and slider side by side */
+@media (max-width:560px){
+  .rows{grid-template-columns:1fr}
+  .row{grid-template-columns:1fr 88px}
+  .row label{grid-column:1 / span 2}
+  .row .wide{grid-column:1 / span 2}
+}
+.badge{
+  font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+  border:1px solid;border-radius:4px;padding:0 4px;line-height:14px;flex:none;
+}
+.badge.rebuild{color:var(--warn);border-color:#5c4813}
+.badge.restart{color:var(--hot);border-color:#6b2b28}
+.badge.mpxcache{color:var(--mpx);border-color:#4a3172}
+
+/* switch */
+.sw{position:relative;display:inline-block;width:38px;height:20px;flex:none;cursor:pointer;vertical-align:middle}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+/* the track is painted over the checkbox, it must not eat the click */
+.sw i{position:absolute;inset:0;pointer-events:none;background:#0b0e13;border:1px solid var(--line);border-radius:20px;transition:.15s}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dim);transition:.15s}
+.sw input:checked+i{background:#123a22;border-color:#2c6b3f}
+.sw input:checked+i::after{left:20px;background:var(--ok)}
+.sw input:focus-visible+i{outline:2px solid var(--accent);outline-offset:1px}
+
+/* band table */
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:4px 8px;text-align:center;border-bottom:1px solid #1d242e;white-space:nowrap}
+th.rowhead,td.rowhead{
+  text-align:left;position:sticky;left:0;background:var(--panel);z-index:2;
+  border-right:1px solid var(--line);
+}
+thead th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em;background:var(--panel2)}
+thead th.rowhead{background:var(--panel2)}
+td input[type=number]{width:82px;text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:hover td{background:#1a212b}
+tbody tr:hover td.rowhead{background:#1a212b}
+.bandlevel{height:4px;background:#0b0e13;border-radius:3px;margin-top:3px;overflow:hidden}
+.bandlevel>i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear}
+
+/* status lines for the stream player and the sound card */
+.state{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);
+  padding:8px 10px;margin-top:8px;background:#12171e;border:1px solid var(--line);border-radius:7px}
+.state .led{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+.state.playing .led{background:var(--ok);box-shadow:0 0 8px rgba(63,185,80,.6)}
+.state.playing{color:var(--text)}
+.state.starting .led{background:var(--warn)}
+.state.failed .led{background:var(--hot)}
+.state.failed{color:#ffb3ae}
+#audiostate{margin:0 0 14px}
+
+#toast{
+  position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);
+  background:#1f2732;border:1px solid var(--line);border-radius:8px;
+  padding:9px 16px;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:50;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{border-color:var(--hot);color:#ffb3ae}
+.hint{color:var(--dim);font-size:12px;padding:0 14px 12px;margin:0}
+.hidden{display:none !important}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Vostok Radio <span>/ dsp control</span></h1>
+  <span class="status"><span id="live" class="dot"></span><span id="livetext">connecting</span></span>
+  <span class="status" id="loadtext"></span>
+  <div class="spacer"></div>
+  <input type="search" id="filter" placeholder="filter settings" style="width:170px">
+  <button id="btn-save" class="primary">Save</button>
+  <button id="btn-load">Reload file</button>
+  <button id="btn-restart" class="danger">Restart</button>
+</header>
+
+<main>
+  <div class="state" id="audiostate"><span class="led"></span><span id="audiotext">connecting</span></div>
+  <div class="card">
+    <h2>Levels</h2>
+    <div id="meters"></div>
+  </div>
+  <div id="groups"></div>
+  <p class="hint" id="footer"></p>
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+var schema=null, values=null, nbands=7, configPath="";
+var pending={}, flushTimer=null, needsReload=false;
+
+function el(tag,cls,text){
+  var e=document.createElement(tag);
+  if(cls) e.className=cls;
+  if(text!=null) e.textContent=text;
+  return e;
+}
+function qs(id){ return document.getElementById(id); }
+
+var toastTimer=null;
+function toast(msg,isErr){
+  var t=qs("toast");
+  t.textContent=msg;
+  t.className="show"+(isErr?" err":"");
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){ t.className=""; },2600);
+}
+
+function getJSON(url){
+  return fetch(url,{cache:"no-store"}).then(function(r){
+    if(!r.ok) throw new Error(r.status+" "+r.statusText);
+    return r.json();
+  });
+}
+function post(url,body){
+  return fetch(url,{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:body||""
+  }).then(function(r){ return r.json().catch(function(){ return {}; }); });
+}
+
+/* ---------------------------------------------------------------- sliders */
+/* parameters like the band release span five decades, a linear slider is
+   useless there so those get a logarithmic one */
+function isLog(p){ return p.min>0 && p.max/p.min>=500; }
+var SLIDER_STEPS=1000;
+
+function toSlider(p,v){
+  if(isNaN(v)) v=p.min;
+  if(v<p.min) v=p.min;
+  if(v>p.max) v=p.max;
+  if(isLog(p)){
+    var lo=Math.log(p.min), hi=Math.log(p.max);
+    return Math.round((Math.log(v)-lo)/(hi-lo)*SLIDER_STEPS);
+  }
+  return Math.round((v-p.min)/(p.max-p.min)*SLIDER_STEPS);
+}
+function fromSlider(p,x){
+  var f=x/SLIDER_STEPS, v;
+  if(isLog(p)){
+    var lo=Math.log(p.min), hi=Math.log(p.max);
+    v=Math.exp(lo+f*(hi-lo));
+  }else{
+    v=p.min+f*(p.max-p.min);
+  }
+  if(p.type=="int") return Math.round(v);
+  /* snap to something a human can read back */
+  var mag=Math.max(Math.abs(v),1e-12);
+  var digits=Math.max(3,Math.min(10,4-Math.floor(Math.log(mag)/Math.LN10)));
+  return parseFloat(v.toPrecision(digits));
+}
+function fmt(p,v){
+  if(p.type=="int") return String(v);
+  if(v===0) return "0";
+  var a=Math.abs(v);
+  if(a<0.001||a>=1e6) return v.toExponential(2);
+  return String(parseFloat(v.toPrecision(6)));
+}
+
+/* ------------------------------------------------------------- write path */
+function queueSet(name,value){
+  pending[name]=String(value);
+  if(!flushTimer) flushTimer=setTimeout(flush,120);
+}
+function flush(){
+  flushTimer=null;
+  var body=[],keys=Object.keys(pending);
+  if(!keys.length) return;
+  for(var i=0;i<keys.length;i++)
+    body.push(encodeURIComponent(keys[i])+"="+encodeURIComponent(pending[keys[i]]));
+
+  var touchedBands=(keys.indexOf("mb.bands")>=0);
+  pending={};
+  post("/api/set",body.join("&")).then(function(r){
+    if(r && (r.unknown||r.invalid))
+      toast("rejected: "+(r.first_error||"unknown setting"),true);
+    if(touchedBands) reload();
+  }).catch(function(e){ toast("write failed: "+e.message,true); });
+}
+
+/* --------------------------------------------------------------- controls */
+function makeBadge(p){
+  if(p.apply=="live") return null;
+  var b=el("span","badge "+p.apply,p.apply=="mpxcache"?"cache":p.apply);
+  b.title=p.apply=="rebuild" ? "rebuilds the filters, expect a short click"
+        : p.apply=="mpxcache" ? "regenerates the mpx wave cache, audio drops for a moment"
+        : "takes effect after a restart";
+  return b;
+}
+
+function boolControl(p,index,initial){
+  //a label, so a click anywhere on the switch reaches the checkbox inside it
+  var wrap=el("label","sw");
+  var cb=el("input");
+  cb.type="checkbox";
+  cb.checked=!!initial;
+  cb.addEventListener("change",function(){
+    queueSet(index==null?p.name:p.name+"["+index+"]",cb.checked?1:0);
+  });
+  wrap.appendChild(cb);
+  wrap.appendChild(el("i"));
+  return wrap;
+}
+
+function numberBox(p,index,initial,onlyBox){
+  var box=el("input","num");
+  box.type="number";
+  box.step="any";
+  box.value=fmt(p,initial);
+  box.title=p.help;
+
+  var slider=null;
+  if(!onlyBox){
+    slider=el("input");
+    slider.type="range";
+    slider.min=0;
+    slider.max=SLIDER_STEPS;
+    slider.step=1;
+    slider.value=toSlider(p,initial);
+    slider.title=p.help;
+  }
+
+  var key=(index==null?p.name:p.name+"["+index+"]");
+
+  function push(v){ queueSet(key,v); }
+
+  if(slider){
+    slider.addEventListener("input",function(){
+      var v=fromSlider(p,parseFloat(slider.value));
+      box.value=fmt(p,v);
+      push(v);
+    });
+  }
+  box.addEventListener("change",function(){
+    var v=parseFloat(box.value);
+    if(isNaN(v)){ box.value=fmt(p,p.min); v=p.min; }
+    if(v<p.min) v=p.min;
+    if(v>p.max) v=p.max;
+    if(p.type=="int") v=Math.round(v);
+    box.value=fmt(p,v);
+    if(slider) slider.value=toSlider(p,v);
+    push(v);
+  });
+
+  return {box:box,slider:slider};
+}
+
+function textControl(p,initial){
+  var t=el("input");
+  t.type="text";
+  t.value=initial==null?"":initial;
+  t.title=p.help;
+  t.style.width="100%";
+  t.addEventListener("change",function(){ queueSet(p.name,t.value); });
+  return t;
+}
+
+function scalarRow(p){
+  var row=el("div","row");
+  row.dataset.search=(p.name+" "+p.label+" "+p.group).toLowerCase();
+
+  var lab=el("label");
+  lab.appendChild(el("span","name",p.label));
+  if(p.unit) lab.appendChild(el("span","u",p.unit));
+  var badge=makeBadge(p);
+  if(badge) lab.appendChild(badge);
+  lab.title=p.name+" - "+p.help;
+  row.appendChild(lab);
+
+  var v=values[p.name];
+  if(p.type=="bool"){
+    var mid=el("div");
+    mid.appendChild(boolControl(p,null,v));
+    row.appendChild(mid);
+    row.appendChild(el("span"));
+  }else if(p.type=="string"){
+    var cell=el("div","wide");
+    cell.appendChild(textControl(p,v));
+    row.appendChild(cell);
+  }else{
+    var c=numberBox(p,null,v,false);
+    var holder=el("div");
+    holder.appendChild(c.slider);
+    row.appendChild(holder);
+    row.appendChild(c.box);
+  }
+  return row;
+}
+
+function bandTable(params){
+  var wrap=el("div","scroll");
+  var table=el("table");
+
+  var thead=el("thead");
+  var hr=el("tr");
+  hr.appendChild(el("th","rowhead","band"));
+  for(var i=0;i<nbands;i++){
+    var th=el("th",null,String(i+1));
+    var f=values["band.freq"][i];
+    th.appendChild(el("div","u"));
+    th.lastChild.style.fontSize="10px";
+    th.lastChild.style.color="var(--dim)";
+    th.lastChild.textContent=(f>=1000?(f/1000)+"k":f)+"Hz";
+    var lv=el("div","bandlevel");
+    lv.appendChild(el("i"));
+    lv.id="bandlevel"+i;
+    th.appendChild(lv);
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody=el("tbody");
+  for(var k=0;k<params.length;k++){
+    var p=params[k];
+    var tr=el("tr");
+    tr.dataset.search=(p.name+" "+p.label).toLowerCase();
+
+    var head=el("td","rowhead");
+    head.appendChild(el("span",null,p.label));
+    if(p.unit) head.appendChild(el("span","u"," "+p.unit));
+    var badge=makeBadge(p);
+    if(badge){ head.appendChild(document.createTextNode(" ")); head.appendChild(badge); }
+    head.title=p.name+" - "+p.help;
+    tr.appendChild(head);
+
+    for(var b=0;b<nbands;b++){
+      var td=el("td");
+      if(p.type=="bool"){
+        td.appendChild(boolControl(p,b,values[p.name][b]));
+      }else{
+        td.appendChild(numberBox(p,b,values[p.name][b],true).box);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+/* ------------------------------------------------------------------ meters */
+var METERS=[
+  ["pre_agc","before agc"],
+  ["post_agc","after agc"],
+  ["pre_clip","before clipper"],
+  ["post_clip","after clipper"],
+  ["distortion","clipper activity"]
+];
+
+function buildMeters(){
+  var host=qs("meters");
+  host.textContent="";
+  for(var i=0;i<METERS.length;i++){
+    var m=el("div","meter");
+    var cap=el("div","cap");
+    cap.appendChild(el("span",null,METERS[i][1]));
+    var val=el("b","","-");
+    val.id="mv_"+METERS[i][0];
+    cap.appendChild(val);
+    m.appendChild(cap);
+    var bar=el("div","bar"+(METERS[i][0]=="distortion"?" solo":""));
+    var fill=el("i");
+    fill.id="mb_"+METERS[i][0];
+    bar.appendChild(fill);
+    m.appendChild(bar);
+    host.appendChild(m);
+  }
+}
+
+function dbPercent(v){
+  if(!(v>0)) return 0;
+  var db=20*Math.log(v/32767)/Math.LN10;
+  var pct=(db+60)/60*100;
+  return Math.max(0,Math.min(100,pct));
+}
+
+function drawMeters(m){
+  for(var i=0;i<4;i++){
+    var key=METERS[i][0], v=m[key]||0;
+    qs("mb_"+key).style.width=dbPercent(v).toFixed(1)+"%";
+    var db=v>0?20*Math.log(v/32767)/Math.LN10:-99;
+    qs("mv_"+key).textContent=(db<=-99?"-inf":db.toFixed(1))+" dB";
+  }
+  var d=m.distortion||0;
+  qs("mb_distortion").style.width=Math.min(100,d*20).toFixed(1)+"%";
+  qs("mv_distortion").textContent=d.toFixed(2)+" %";
+
+  if(m.band_level){
+    for(var b=0;b<m.band_level.length;b++){
+      var node=qs("bandlevel"+b);
+      if(node) node.firstChild.style.width=dbPercent(Math.abs(m.band_level[b])).toFixed(1)+"%";
+    }
+  }
+  setText("loadtext",m.running?("dsp load "+(m.load||0).toFixed(0)+"%"):"");
+
+  /* a missing node must not stop the rest of the meters from updating */
+  if(m.audio){
+    setText("audiotext",m.audio.ok
+      ? ("sound card: "+m.audio.text)
+      : ("no audio: "+m.audio.text+" - retrying every 3s, you can change the device below"));
+    setClass("audiostate","state "+(m.audio.ok?"playing":"failed"));
+  }
+
+  var stateNames=["off","starting","playing","failed"];
+  if(m.source){
+    setText("srctext",m.source.text);
+    setClass("srcstate","state "+(stateNames[m.source.state]||"off"));
+  }
+
+  if(m.rds){
+    setText("rdstext",m.rds.text);
+    var cls=m.rds.on?"playing":(m.rds.text=="off"?"off":"failed");
+    setClass("rdsstate","state "+cls);
+  }
+}
+
+function setText(id,text){
+  var n=qs(id);
+  if(n) n.textContent=text;
+}
+function setClass(id,cls){
+  var n=qs(id);
+  if(n) n.className=cls;
+}
+
+function statusLine(prefix){
+  var st=el("div","state");
+  st.id=prefix+"state";
+  st.appendChild(el("span","led"));
+  var txt=el("span",null,"...");
+  txt.id=prefix+"text";
+  st.appendChild(txt);
+  return st;
+}
+
+/* -------------------------------------------------------------- rendering */
+function render(){
+  var host=qs("groups");
+  host.textContent="";
+
+  var order=[], byGroup={};
+  for(var i=0;i<schema.params.length;i++){
+    var p=schema.params[i];
+    if(!byGroup[p.group]){ byGroup[p.group]=[]; order.push(p.group); }
+    byGroup[p.group].push(p);
+  }
+
+  for(var g=0;g<order.length;g++){
+    var name=order[g], list=byGroup[name];
+    var card=el("div","card");
+    card.appendChild(el("h2",null,name));
+    var body=el("div","body");
+
+    if(list[0].band){
+      body.appendChild(bandTable(list));
+    }else{
+      var rows=el("div","rows");
+      for(var k=0;k<list.length;k++) rows.appendChild(scalarRow(list[k]));
+      body.appendChild(rows);
+    }
+
+    /* the stream player and the rds encoder both report back */
+    if(name=="Stream source") body.appendChild(statusLine("src"));
+    if(name=="RDS") body.appendChild(statusLine("rds"));
+
+    card.appendChild(body);
+    host.appendChild(card);
+  }
+  applyFilter();
+}
+
+function applyFilter(){
+  var q=qs("filter").value.trim().toLowerCase();
+  var nodes=document.querySelectorAll("[data-search]");
+  for(var i=0;i<nodes.length;i++){
+    var hit=(q=="" || nodes[i].dataset.search.indexOf(q)>=0);
+    nodes[i].classList.toggle("hidden",!hit);
+  }
+  var cards=document.querySelectorAll("#groups .card");
+  for(var c=0;c<cards.length;c++){
+    var any=cards[c].querySelectorAll("[data-search]:not(.hidden)").length>0;
+    cards[c].classList.toggle("hidden",!any);
+  }
+}
+
+function reload(){
+  return getJSON("/api/state").then(function(s){
+    values=s.values;
+    nbands=s.nbands;
+    render();
+  });
+}
+
+/* ------------------------------------------------------------------- boot */
+function boot(){
+  buildMeters();
+  getJSON("/api/schema").then(function(s){
+    schema=s;
+    configPath=s.config;
+    qs("footer").textContent="settings file: "+configPath+
+      "  -  live changes apply on the next audio buffer, they are only kept across restarts if you press Save";
+    return reload();
+  }).then(function(){
+    setInterval(poll,250);
+    poll();
+  }).catch(function(e){
+    toast("cannot talk to the processor: "+e.message,true);
+  });
+}
+
+var offlineCount=0;
+function poll(){
+  getJSON("/api/meters").then(function(m){
+    offlineCount=0;
+    qs("live").className="dot on";
+    qs("livetext").textContent="connected";
+    drawMeters(m);
+  }).catch(function(){
+    offlineCount++;
+    if(offlineCount>1){
+      qs("live").className="dot";
+      qs("livetext").textContent="offline";
+    }
+  });
+}
+
+qs("filter").addEventListener("input",applyFilter);
+
+qs("btn-save").addEventListener("click",function(){
+  post("/api/save").then(function(r){
+    if(r.ok) toast("saved to "+r.path);
+    else toast("save failed: "+(r.error||"unknown"),true);
+  });
+});
+
+qs("btn-load").addEventListener("click",function(){
+  post("/api/load").then(function(r){
+    if(r.ok){ toast("loaded "+r.applied+" settings from "+r.path); reload(); }
+    else toast("load failed: "+(r.error||"unknown"),true);
+  });
+});
+
+qs("btn-restart").addEventListener("click",function(){
+  if(!confirm("Save the settings and restart the processor?\nAudio stops for a second or two.")) return;
+  post("/api/restart").then(function(){
+    toast("restarting");
+    qs("live").className="dot";
+    qs("livetext").textContent="restarting";
+    var tries=0;
+    var t=setInterval(function(){
+      tries++;
+      getJSON("/api/state").then(function(){
+        clearInterval(t);
+        reload().then(function(){ toast("processor is back"); });
+      }).catch(function(){
+        if(tries>40){ clearInterval(t); toast("the processor did not come back",true); }
+      });
+    },700);
+  });
+});
+
+boot();
+</script>
+</body>
+</html>

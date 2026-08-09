@@ -229,8 +229,41 @@ void set_latency(int latency_buffers){
  logged=(unsigned int) latency_buffers; 
 }
 
+static char last_error[256]="";
+
+const char* alsa_pipe_error(void){
+  return last_error;
+}
+
+//leave nothing open when setup fails, the caller is allowed to try again
+static char reported_error[256]="";
+
+static int setup_failed(const char* what,const char* device,int code){
+  if(code!=0)
+    snprintf(last_error,sizeof(last_error),"%s '%s': %s",what,device,snd_strerror(code));
+  else
+    snprintf(last_error,sizeof(last_error),"%s '%s'",what,device);
+
+  //setup is retried every few seconds, only log a message once
+  if(strcmp(last_error,reported_error)!=0){
+    snprintf(reported_error,sizeof(reported_error),"%s",last_error);
+    printf("%s\n",last_error);
+    fflush(stdout);
+  }
+
+  if(output!=NULL){
+    snd_pcm_close(output);
+    output=NULL;
+  }
+  if(input!=NULL){
+    snd_pcm_close(input);
+    input=NULL;
+  }
+  return -1;
+}
+
 int setup_alsa_pipe(char* recording_iface, char* playback_iface, int* channels_in,int* channels_out,int* input_rate,int* output_rate, int buffer_Size){
- 
+
   //needed to configure alsa parameters
   forward_buffer_size=(unsigned int)buffer_Size;
   step_back=STEP_BACK*forward_buffer_size;
@@ -238,24 +271,28 @@ int setup_alsa_pipe(char* recording_iface, char* playback_iface, int* channels_i
   start_drop=forward_buffer_size*DROPPING;
   memcpy_size=forward_buffer_size*sizeof(int);
 
+  last_error[0]=0;
+  de_signal=0;
+  output=NULL;
+  input=NULL;
+
   //alsa stuff
 
-	if ( snd_pcm_open(&output, playback_iface,SND_PCM_STREAM_PLAYBACK, 0) < 0){		
-		printf("unable to open playback interface\n");
-		return -1;
-	} 
-  if ( snd_pcm_open(&input, recording_iface,SND_PCM_STREAM_CAPTURE, 0) < 0){		
-		printf("unable to open recording interface\n");
-		return -1;
-	} 
+  int status;
+	if ((status=snd_pcm_open(&output, playback_iface,SND_PCM_STREAM_PLAYBACK, 0)) < 0){
+    output=NULL;
+    return setup_failed("unable to open playback interface",playback_iface,status);
+	}
+  if ((status=snd_pcm_open(&input, recording_iface,SND_PCM_STREAM_CAPTURE, 0)) < 0){
+    input=NULL;
+    return setup_failed("unable to open recording interface",recording_iface,status);
+	}
 
 	if(configure_sound_card(output,forward_buffer_size*STEP_BACK,(unsigned int*)output_rate,channels_out,SND_PCM_FORMAT_S32_LE)<0){
-    printf("play config failed \n");
-		return -1;
+    return setup_failed("playback interface will not take 32 bit stereo",playback_iface,0);
 	}
 	if(configure_sound_card(input,forward_buffer_size*STEP_BACK,(unsigned int*)input_rate,channels_in,SND_PCM_FORMAT_S32_LE)<0){
-    printf("record config failed \n");
-		return -1;
+    return setup_failed("recording interface will not take 32 bit stereo",recording_iface,0);
 	}
 
   rate = *output_rate;
